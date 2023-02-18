@@ -1,0 +1,45 @@
+{
+	"group": "IOS",
+	"libs": [],
+	"frameworks": [
+		"JavaScriptCore.framework",
+		"WebKit.framework",
+		"CoreTelephony.framework",
+		"AdSupport.framework",
+		"Photos.framework"
+	],
+	"headerpaths": [
+		"IOS/files/**"
+	],
+	"files": [],
+	"folders": [
+		"IOS/files/"
+	],
+	"excludes": [
+		"^.*.meta$",
+		"^.*.mdown$",
+		"^.*.pdf$",
+		".DS_Store"
+	],
+	"compiler_flags": [],
+	"linker_flags": [
+		"-ObjC"
+	],
+	"plist": {
+		"NSPhotoLibraryUsageDescription": "App需要您的同意,才能访问相册",
+		"NSPhotoLibraryAddUsageDescription": "App需要您的同意,才能保存图片到相册",
+		"NSLocationUsageDescription": "App需要您的同意,才能访问位置",
+		"ITSAppUsesNonExemptEncryption": false,
+		"CFBundleDevelopmentRegion": "zh-CN",
+		"urltype": [
+			{
+				"name": "zysy_hy",
+				"role": "Editor",
+				"schemes": [
+					"com.nd.zysy"
+				]
+			}
+		]
+	},
+	"code_modify": []
+}
