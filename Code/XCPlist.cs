@@ -1,12 +1,18 @@
+#if UNITY_EDITOR_OSX
 using System;
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using UnityEditor;
 using UnityEditor.iOS.Xcode;
+using System.Linq;
 
 namespace NdXUPorter
 {
+    /// <summary>
+    /// plist的修改
+    /// </summary>
     public class XCPlist
     {
         string plistPath;
@@ -36,6 +42,10 @@ namespace NdXUPorter
         public XCPlist(string plistPath)
         {
             this.plistPath = plistPath;
+            plistDoc = new PlistDocument();
+            plistDoc.ReadFromFile(plistPath);
+            //get root
+            rootDict = plistDoc.root;
         }
 
         public void Process(Hashtable plist)
@@ -43,19 +53,14 @@ namespace NdXUPorter
             try
             {
                 if (plist == null) return;
-                plistDoc = new PlistDocument();
-                plistDoc.ReadFromFile(plistPath);
-                //get root
-                rootDict = plistDoc.root;
                 foreach (DictionaryEntry entry in plist)
                 {
                     this.AddPlistItems((string)entry.Key, entry.Value);
                 }
-                if (plistModified)
-                {
-                    Debug.Log("Save Plist");
-                    plistDoc.WriteToFile(plistPath);
-                }
+
+                CustomPlistMod();
+
+                
             }
             catch (Exception e)
             {
@@ -63,13 +68,82 @@ namespace NdXUPorter
             }
         }
 
+        public void Save()
+        {
+            if (plistModified)
+            {
+                Debug.Log("Save Plist");
+                plistDoc.WriteToFile(plistPath);
+            }
+        }
+        /// <summary>
+        /// 自定义构建plist，这里主要构建版本信息
+        /// </summary>
+        private void CustomPlistMod()
+        {
+            //Version
+            var buildKey = "CFBundleShortVersionString";
+            rootDict.SetString(buildKey, AppBuildPipeline.versionNumber);
+
+            //Build
+            buildKey = "CFBundleVersion";
+            rootDict.SetString(buildKey, AppBuildPipeline.buildNumber.ToString());
+
+            // 测试版开启文件共享
+            if (PlayerSettings.productName[PlayerSettings.productName.Length - 1] == 'β')
+            {
+                rootDict.SetBoolean("UIFileSharingEnabled", true);
+            }
+
+            //bundleID
+            //        buildKey = "CFBundleIdentifier";
+            //        rootDict.SetString(buildKey, BuildParams.iosBundleId);
+
+            //PlistElementDict dic1 = rootDict.CreateDict("NSAppTransportSecurity");
+            //dic1.SetBoolean("NSAllowsArbitraryLoads", true);
+
+            //TODO:移到XUPort projmods 配置里添加
+            //        rootDict.SetString("NSPhotoLibraryUsageDescription", "App需要您的同意,才能访问相册");
+            //        rootDict.SetString("NSPhotoLibraryAddUsageDescription", "App需要您的同意,才能保存图片到相册");
+            //虽然代码里没有用到，苹果还是建议加上。
+            //NSLocationWhenInUseUsageDescription key with a user-facing purpose string explaining clearly and completely why your app needs the data.
+            //While your app might not use these APIs, a purpose string is still required.
+            //        rootDict.SetString("NSLocationUsageDescription", "App需要您的同意,才能访问位置");
+
+            //删除UIApplicationExitsOnSuspend（UIApplicationExitsOnSuspend暂时忽略处理）
+            string exitsOnSuspendKey = "UIApplicationExitsOnSuspend";
+            if (rootDict.values.ContainsKey(exitsOnSuspendKey))
+            {
+                rootDict.values.Remove(exitsOnSuspendKey);
+            }
+
+            //升级到unity2020 不需要了
+            // string rdc = "UIRequiredDeviceCapabilities";
+            // if (rootDict.values.ContainsKey(rdc))
+            // {
+            //     // unity默认<string>armv7</string>
+            //     // 2022 ios 提审不通过，UIRequiredDeviceCapabilities键输入信息。plist的设置方式使该应用程序不会安装在iPhone和iPad上。
+            //     var capabilities = rootDict[rdc].AsArray();
+            //     capabilities.values.RemoveAll(item => item.AsString() == "armv7"); // 移除v7
+            //     capabilities.values.Add(new PlistElementString("arm64"));
+            // }
+            plistModified = true;
+        }
+
         // http://stackoverflow.com/questions/20618809/hashtable-to-dictionary
+        //public static Dictionary<K, V> HashtableToDictionary<K, V>(Hashtable table)
+        //{
+        //    Dictionary<K, V> dict = new Dictionary<K, V>();
+        //    foreach (DictionaryEntry kvp in table)
+        //        dict.Add((K)kvp.Key, (V)kvp.Value);
+        //    return dict;
+        //}
+
         public static Dictionary<K, V> HashtableToDictionary<K, V>(Hashtable table)
         {
-            Dictionary<K, V> dict = new Dictionary<K, V>();
-            foreach (DictionaryEntry kvp in table)
-                dict.Add((K)kvp.Key, (V)kvp.Value);
-            return dict;
+            return table
+              .Cast<DictionaryEntry>()
+              .ToDictionary(kvp => (K)kvp.Key, kvp => (V)kvp.Value);
         }
 
         /// <summary>
@@ -94,15 +168,21 @@ namespace NdXUPorter
             else
             {
                 var vtype = value.GetType();
-                //单独支持String类型
-                if (vtype == typeof(System.String) || vtype == typeof(System.Boolean) || vtype == typeof(System.Array))
+                if (vtype == typeof(System.String) || vtype == typeof(System.Boolean) || vtype == typeof(System.Array) || vtype == typeof(ArrayList))
                 {
                     SetPlistDictValue(rootDict, key, value);
                 }
                 else
                 {
                     //默认是字典类型
-                    PlistElementDict plistDict = rootDict.values[key].AsDict();
+                    var plistDictElement = TryGetValue(rootDict, key);
+                    PlistElementDict plistDict;
+                    if (plistDictElement==null)
+                    {
+                        plistDict = rootDict.CreateDict(key);
+                    }
+                    else
+                        plistDict = plistDictElement.AsDict();
                     var dict = HashtableToDictionary<string, object>((Hashtable)value);
                     foreach (var o in dict)
                     {
@@ -113,8 +193,16 @@ namespace NdXUPorter
             }
         }
 
+        private PlistElement TryGetValue(PlistElementDict dict, string key)
+        {
+            if (dict.values.TryGetValue(key, out var e))
+                return e;
+            return null;
+        }
+
         private void SetPlistDictValue(PlistElementDict e, string key, object value)
         {
+            Debug.Log("SetPlistDictValue: key=" + key + "  ;value =" + value + " ;type =" + value.GetType());
             var vtype = value.GetType();
             if (vtype == typeof(System.String))
             {
@@ -124,7 +212,7 @@ namespace NdXUPorter
             {
                 e.SetBoolean(key, (bool)value);
             }
-            else if (vtype == typeof(System.Array))
+            else if (vtype == typeof(System.Array) || vtype == typeof(ArrayList))
             {
                 SetPlistDictArray(e, key, (ArrayList)value);
             }
@@ -137,15 +225,37 @@ namespace NdXUPorter
         private void SetPlistDictArray(PlistElementDict e, string key, ArrayList array)
         {
             Debug.Log($"add plist Array key = {key}");
-            PlistElementArray plistArray = e.values[key].AsArray();
-            if (plistArray == null)
+            var plistArrayElement = TryGetValue(rootDict, key);
+            PlistElementArray plistArray;
+            if (plistArrayElement == null)
                 plistArray = e.CreateArray(key);
+            else
+                plistArray = plistArrayElement.AsArray();
+
             foreach (object s in array)
             {
-                if (s is string)
-                {
-                    Debug.Log($"add array {key} ： element={s}");
+                var vtype = s.GetType();
+                Debug.Log($"add array element={s}" + " ;type =" + vtype);                
+                if (vtype == typeof(System.String))
+                {                    
                     plistArray.AddString((string)s);
+                }
+                else if (vtype == typeof(System.Boolean))
+                {
+                    plistArray.AddBoolean((bool)s);
+                }
+                else if(vtype == typeof(System.Int32))
+                {
+                    plistArray.AddInteger((Int32)s);
+                }
+                else if(vtype == typeof(Hashtable))
+                {           
+                    PlistElementDict plistDict = plistArray.AddDict();              
+                    var dict = HashtableToDictionary<string, object>((Hashtable)s);
+                    foreach (var o in dict)
+                    {
+                        SetPlistDictValue(plistDict, o.Key, o.Value);
+                    }
                 }
                 else
                 {
@@ -221,3 +331,5 @@ namespace NdXUPorter
         }
     }
 }
+
+#endif

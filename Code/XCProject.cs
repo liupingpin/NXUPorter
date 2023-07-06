@@ -1,4 +1,4 @@
-#if !UNITY_EDITOR_OSX
+#if UNITY_EDITOR_OSX
 using UnityEngine;
 using UnityEditor;
 using System.Collections;
@@ -7,11 +7,15 @@ using System.IO;
 using System.Text.RegularExpressions;
 using UnityEditor.iOS.Xcode;
 using UnityEditor.iOS.Xcode.Extensions;
+using System;
+using System.Reflection;
 
 namespace NdXUPorter
 {
     public class XCProject : System.IDisposable
     {
+
+        public bool needSwiftModule;
         /// <summary>
         /// 构建类型
         /// </summary>
@@ -25,44 +29,48 @@ namespace NdXUPorter
             /// .framework 文件，target 选择 UnityFramework，可以不用指定 BuildPhase。
             /// .a .dylib .tbd 文件，target 选择 UnityFramework，BuildPhase 选择 FrameworksBuildPhase。
             /// </summary>
-            PBXFrameworksBuildPhase,
+            PBXFrameworks_UnityFramework,
             /// <summary>
-            /// .h .m .mm .c .cpp 等源文件，target 选择 UnityFramework，BuildPhase 选择 SourcesBuildPhase
+            /// .m .mm .c .cpp 等源文件，target 选择 UnityFramework，BuildPhase 选择 SourcesBuildPhase
             /// </summary>
-            PBXSourcesBuildPhase,
+            PBXSources_UnityFramework,
             /// <summary>
-            /// .json .plist .bundle .config 等资源文件，target 选择 Unity-iPhone，BuildPhase 选择 ResourcesBuildPhase
+            ///  .h  等源文件，target 选择 UnityFramework，不加入 BuildPhase
             /// </summary>
-            PBXResourcesBuildPhase,
+            PBXSources_UnityFramework_NoBuildPhase,
+            /// <summary>
+            /// .json .plist .bundle .config .xcdatamodeld 等资源文件，target 选择 Unity-iPhone，BuildPhase 选择 ResourcesBuildPhase
+            /// </summary>
+            PBXResources_UnityIPhone,
         }
         public static readonly Dictionary<string, PbxBuildType> typePhases = new Dictionary<string, PbxBuildType> {
-            { ".a", PbxBuildType.PBXFrameworksBuildPhase },
+            { ".a", PbxBuildType.PBXFrameworks_UnityFramework },
             { ".app", PbxBuildType.Null },
-            { ".s", PbxBuildType.PBXSourcesBuildPhase },
-            { ".c", PbxBuildType.PBXSourcesBuildPhase },
-            { ".cpp", PbxBuildType.PBXSourcesBuildPhase },
-            { ".framework", PbxBuildType.PBXFrameworksBuildPhase },
-            { ".h", PbxBuildType.PBXSourcesBuildPhase },
+            { ".s", PbxBuildType.PBXSources_UnityFramework },
+            { ".c", PbxBuildType.PBXSources_UnityFramework },
+            { ".cpp", PbxBuildType.PBXSources_UnityFramework },
+            { ".framework", PbxBuildType.PBXFrameworks_UnityFramework },
+            { ".h", PbxBuildType.PBXSources_UnityFramework_NoBuildPhase },
             { ".pch", PbxBuildType.Null },
-            { ".icns", PbxBuildType.PBXResourcesBuildPhase },
-            { ".m", PbxBuildType.PBXSourcesBuildPhase },
-            { ".mm", PbxBuildType.PBXSourcesBuildPhase },
-            { ".xcdatamodeld", PbxBuildType.PBXSourcesBuildPhase },
-            { ".nib", PbxBuildType.PBXResourcesBuildPhase },
-            { ".plist", PbxBuildType.PBXResourcesBuildPhase },
-            { ".png", PbxBuildType.PBXResourcesBuildPhase },
-            { ".rtf", PbxBuildType.PBXResourcesBuildPhase },
-            { ".tiff", PbxBuildType.PBXResourcesBuildPhase },
-            { ".txt", PbxBuildType.PBXResourcesBuildPhase },
-            { ".json", PbxBuildType.PBXResourcesBuildPhase },
+            { ".icns", PbxBuildType.PBXResources_UnityIPhone },
+            { ".m", PbxBuildType.PBXSources_UnityFramework },
+            { ".mm", PbxBuildType.PBXSources_UnityFramework },
+            { ".xcdatamodeld", PbxBuildType.PBXResources_UnityIPhone },
+            { ".nib", PbxBuildType.PBXResources_UnityIPhone },
+            { ".plist", PbxBuildType.PBXResources_UnityIPhone },
+            { ".png", PbxBuildType.PBXResources_UnityIPhone },
+            { ".rtf", PbxBuildType.PBXResources_UnityIPhone },
+            { ".tiff", PbxBuildType.PBXResources_UnityIPhone },
+            { ".txt", PbxBuildType.PBXResources_UnityIPhone },
+            { ".json", PbxBuildType.PBXResources_UnityIPhone },
             { ".xcodeproj", PbxBuildType.Null },
-            { ".xib", PbxBuildType.PBXResourcesBuildPhase },
-            { ".strings", PbxBuildType.PBXResourcesBuildPhase },
-            { ".bundle", PbxBuildType.PBXResourcesBuildPhase },
-            { ".dylib", PbxBuildType.PBXFrameworksBuildPhase },
-            { ".tbd", PbxBuildType.PBXFrameworksBuildPhase },
-            { ".inl", PbxBuildType.PBXResourcesBuildPhase },
-            { ".mom", PbxBuildType.PBXResourcesBuildPhase },
+            { ".xib", PbxBuildType.PBXResources_UnityIPhone },
+            { ".strings", PbxBuildType.PBXResources_UnityIPhone },
+            { ".bundle", PbxBuildType.PBXResources_UnityIPhone },
+            { ".dylib", PbxBuildType.PBXFrameworks_UnityFramework },
+            { ".tbd", PbxBuildType.PBXFrameworks_UnityFramework },
+            { ".inl", PbxBuildType.PBXResources_UnityIPhone },
+            { ".mom", PbxBuildType.PBXResources_UnityIPhone },
             { ".meta", PbxBuildType.Null},
         };
         /// <summary>
@@ -74,6 +82,8 @@ namespace NdXUPorter
         /// </summary>
         public string pbxProjPath { get; private set; }
         public PBXProject pbxProject { get; private set; }
+        public ProjectCapabilityManager capabilityManager { get; private set; }
+        public XCPlist plist { get; private set; }
         /// <summary>
         /// Unity-iPhone guid
         /// </summary>
@@ -84,6 +94,8 @@ namespace NdXUPorter
         public string unityFrameworkTargetGuid { get; private set; }
 
         private HashSet<string> usedFileNames = new HashSet<string>();
+
+        private bool hasCapabilityModify;
 
         #region Constructor
 
@@ -96,25 +108,23 @@ namespace NdXUPorter
                 return;
             }
 
+            needSwiftModule = false;
             projectRootPath = filePath;
             pbxProjPath = PBXProject.GetPBXProjectPath(filePath);
             pbxProject = new PBXProject();
             pbxProject.ReadFromString(File.ReadAllText(pbxProjPath));
 
-            var unityMainTargetGuidMethod = pbxProject.GetType().GetMethod("GetUnityMainTargetGuid");
-            var unityFrameworkTargetGuidMethod = pbxProject.GetType().GetMethod("GetUnityFrameworkTargetGuid");
-            if (unityMainTargetGuidMethod != null && unityFrameworkTargetGuidMethod != null)
-            {
-                unityMainTargetGuid = (string)unityMainTargetGuidMethod.Invoke(pbxProject, null);
-                unityFrameworkTargetGuid = (string)unityFrameworkTargetGuidMethod.Invoke(pbxProject, null);
-            }
-            else
-            {
-                unityMainTargetGuid = pbxProject.TargetGuidByName("Unity-iPhone");
-                unityFrameworkTargetGuid = unityMainTargetGuid;
-            }
+            unityMainTargetGuid = pbxProject.GetUnityMainTargetGuid();
+            unityFrameworkTargetGuid = pbxProject.GetUnityFrameworkTargetGuid();
 
+            //Capability
+            capabilityManager = new ProjectCapabilityManager(pbxProjPath, "Entitlements.entitlements", null, unityMainTargetGuid);
+
+            //plist
+            string plistPath = Path.Combine(this.projectRootPath, "Info.plist");
+            plist = new XCPlist(plistPath);
         }
+
 
         #endregion
 
@@ -128,7 +138,7 @@ namespace NdXUPorter
             return relativeDirPath;
         }
         private void AddFrameworkSearchPath(string targetGuid, string dirPath)
-        {            
+        {
             if (string.IsNullOrEmpty(dirPath))
             {
                 //$(PROJECT_DIR)项目目录
@@ -163,6 +173,55 @@ namespace NdXUPorter
             }
         }
 
+        /// <summary>
+        /// 加载unity-iphone 上
+        /// </summary>
+        /// <param name="filePath"></param>
+        public void AddEmbedFile(string filePath)
+        {
+            Debug.Log("AddEmbedFile " + filePath);
+            if (filePath == null)
+            {
+                Debug.LogError("AddEmbedFile called with null filePath");
+                return;
+            }
+            //判读是否在文件是否工程下
+            if (!filePath.Contains(projectRootPath))
+            {
+                Debug.LogError("AddEmbedFile called with not in project root path");
+                return;
+            }
+            //Check if there is already a file
+            var fileName = System.IO.Path.GetFileName(filePath);
+            if (usedFileNames.Contains(fileName))
+            {
+                Debug.Log("File already exists: " + filePath); //not a warning, because this is normal for most builds!
+                return;
+            }
+
+            usedFileNames.Add(fileName);
+            string extension = System.IO.Path.GetExtension(filePath);
+            typePhases.TryGetValue(extension, out var buildPhase);
+            var relativePath = filePath?.Replace(projectRootPath, "");
+            if (relativePath.StartsWith("/"))
+            {
+                relativePath = relativePath.Substring(1);
+            }
+            //Debug.Log(relativePath);
+            var dirPath = GetRelativeDirPath(filePath);
+            if (extension == ".framework")
+            {
+                AddFrameworkSearchPath(unityMainTargetGuid, dirPath);
+
+                string fileGuid = pbxProject.AddFile(relativePath, relativePath, PBXSourceTree.Source);
+                PBXProjectExtensions.AddFileToEmbedFrameworks(pbxProject, unityMainTargetGuid, fileGuid);
+            }
+            else
+            {
+                Debug.LogError("AddEmbedFile not supported file");
+            }
+        }
+
         public void AddFile(string filePath)
         {
             Debug.Log("AddFile " + filePath);
@@ -189,7 +248,7 @@ namespace NdXUPorter
             string extension = System.IO.Path.GetExtension(filePath);
             typePhases.TryGetValue(extension, out var buildPhase);
             var relativePath = filePath?.Replace(projectRootPath, "");
-            if(relativePath.StartsWith("/"))
+            if (relativePath.StartsWith("/"))
             {
                 relativePath = relativePath.Substring(1);
             }
@@ -197,7 +256,7 @@ namespace NdXUPorter
             string fileGuid;
             switch (buildPhase)
             {
-                case PbxBuildType.PBXFrameworksBuildPhase:
+                case PbxBuildType.PBXFrameworks_UnityFramework:
                     var dirPath = GetRelativeDirPath(filePath);
                     if (extension == ".framework")
                         AddFrameworkSearchPath(unityFrameworkTargetGuid, dirPath);
@@ -207,15 +266,20 @@ namespace NdXUPorter
                     }
                     pbxProject.AddFileToBuild(unityFrameworkTargetGuid, pbxProject.AddFile(relativePath, relativePath, PBXSourceTree.Source));
                     break;
-                case PbxBuildType.PBXResourcesBuildPhase:
-                    pbxProject.AddFileToBuild(unityMainTargetGuid, pbxProject.AddFile(relativePath, relativePath, PBXSourceTree.Source));
+                case PbxBuildType.PBXResources_UnityIPhone:
+                    fileGuid = pbxProject.AddFile(relativePath, relativePath, PBXSourceTree.Source);
+                    pbxProject.AddFileToBuild(unityMainTargetGuid, fileGuid);
+                    pbxProject.AddFileToBuild(unityFrameworkTargetGuid, fileGuid);
                     break;
-                case PbxBuildType.PBXSourcesBuildPhase:
+                case PbxBuildType.PBXSources_UnityFramework:
                     fileGuid = pbxProject.AddFile(relativePath, relativePath, PBXSourceTree.Source);
                     //.h 文件不需要加入BuildPhase
                     if (extension == ".h") break;
                     var sourcesBuildPhase = pbxProject.GetSourcesBuildPhaseByTarget(unityFrameworkTargetGuid);
                     pbxProject.AddFileToBuildSection(unityFrameworkTargetGuid, sourcesBuildPhase, fileGuid);
+                    break;
+                case PbxBuildType.PBXSources_UnityFramework_NoBuildPhase:
+                    pbxProject.AddFile(relativePath, relativePath, PBXSourceTree.Source);
                     break;
                 case PbxBuildType.Null:
                     Debug.LogWarning("File Not Supported: " + filePath);
@@ -298,6 +362,86 @@ namespace NdXUPorter
 
             return true;
         }
+        /// <summary>
+        /// 修改Capability
+        /// </summary>
+        public bool AddCapability(int c)
+        {
+            Debug.Log("Add capability " + c);
+            switch (c)
+            {
+                case 1:
+                    //内购
+                    pbxProject.AddFrameworkToProject(unityMainTargetGuid, "StoreKit.framework", false);
+                    capabilityManager.AddInAppPurchase();
+                    return false;
+                case 2:
+                    //苹果登录
+                    capabilityManager.AddSignInWithApple();
+                    break;
+                case 3:
+                    //推送
+                    capabilityManager.AddPushNotifications(false);
+                    capabilityManager.AddBackgroundModes(BackgroundModesOptions.RemoteNotifications);
+                    break;
+                default:
+                    Debug.LogWarning("未实现类型 " + c);
+                    return false;
+            }
+
+            return true;
+        }
+
+        #endregion
+
+        #region 项目自定义部分
+        /// <summary>
+        /// 将大部分动态配置放在XUPorter来构建。
+        /// 要注意勾选掉 select platform for plugins 的 ios 选项，防止unity 自身拷贝到xcode 导致 xuporter 导出失败。
+        /// </summary>
+        public void CustomMod()
+        {
+            //ProductName
+            string productName = "unknow";
+            var identifier = PlayerSettings.applicationIdentifier;
+            var strs = identifier.Split('.');
+            if (strs.Length > 0)
+            {
+                productName = strs[strs.Length - 1];
+            }
+            AppBuildPipeline.productName = productName;
+            Debug.Log("Xcode ProductName=" + productName);
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "PRODUCT_NAME_APP", productName);
+
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "ENABLE_BITCODE", "NO");
+            pbxProject.SetBuildProperty(unityFrameworkTargetGuid, "ENABLE_BITCODE", "NO");
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "ENABLE_OBJECTIVE-C_EXCEPTIONS", "YES");
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "ENABLE_C++_EXCEPTIONS", "YES");
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "ENABLE_C++_RUNTIME_TYPES", "YES");
+        }
+
+        public void SwiftSetting()
+        {
+            //文件加入build phases
+            var uibhPath = "Unity-iPhone-Bridging-Header.h";
+            pbxProject.AddFile(uibhPath, uibhPath);
+
+            var ndSwiftPath = "NdSwift.swift";
+            var ndSwiftFileGuid = pbxProject.AddFile(ndSwiftPath, ndSwiftPath,PBXSourceTree.Source);
+            pbxProject.AddFileToBuild(unityFrameworkTargetGuid, ndSwiftFileGuid);
+            pbxProject.AddFileToBuild(unityMainTargetGuid, ndSwiftFileGuid);
+
+            //设置开启swift  
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "SWIFT_OBJC_BRIDGING_HEADER", "Unity-iPhone-Bridging-Header.h");
+
+            pbxProject.SetBuildProperty(unityMainTargetGuid, "SWIFT_OBJC_INTERFACE_HEADER_NAME", $"{AppBuildPipeline.productName}-Swift.h");
+            pbxProject.SetBuildProperty(unityFrameworkTargetGuid, "SWIFT_OBJC_INTERFACE_HEADER_NAME", "UnityFramework-Swift.h");
+
+            pbxProject.AddBuildProperty(unityMainTargetGuid, "SWIFT_VERSION", "5.0");
+            pbxProject.AddBuildProperty(unityFrameworkTargetGuid, "SWIFT_VERSION", "5.0");
+
+            pbxProject.AddBuildProperty(unityMainTargetGuid, "ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES", "YES");
+        }
 
         #endregion
 
@@ -348,10 +492,22 @@ namespace NdXUPorter
             {
                 string[] filename = framework.Split(':');
                 bool isWeak = (filename.Length > 1) ? true : false;
-                string completePath = filename[0];//System.IO.Path.Combine("System/Library/Frameworks", filename[0]);
+                string completePath = filename[0];
+                Debug.Log("Add framework " + completePath + " isWeek:" + isWeak);
+                //系统framework，后缀必须是.framework ， isWeak True 对应 Optional ,False 对应 Required
                 pbxProject.AddFrameworkToProject(unityFrameworkTargetGuid, completePath, isWeak);
             }
-
+            // Optional fields, support XCode 6+ Embed Framework feature. Notice: The frameworks must added already in frameworks or files fields.
+            // 添加 到 Embed Frameworks,也就是设置成 Embed&sign，要加在 Unity-iPhone上，不是加载UnityFramework
+            Debug.Log("Adding embed binaries...");
+            if (mod.embed_binaries != null)
+            {
+                foreach (string binary in mod.embed_binaries)
+                {
+                    string absoluteFilePath = System.IO.Path.Combine(mod.path, binary);
+                    AddEmbedFile(absoluteFilePath);
+                }
+            }
             //Files which should be added
             Debug.Log("Adding files...");
             //第三方文件,建议能使用文件夹就使用文件夹
@@ -359,23 +515,6 @@ namespace NdXUPorter
             {
                 string absoluteFilePath = System.IO.Path.Combine(mod.path, filePath);
                 this.AddFile(absoluteFilePath);
-            }
-            // Optional fields, support XCode 6+ Embed Framework feature. Notice: The frameworks must added already in frameworks or files fields.
-            Debug.Log("Adding embed binaries...");
-            if (mod.embed_binaries != null)
-            {
-                //TODO:后续看需求做
-                Debug.LogWarning("embed binaries want to do");
-                // pbxProject.SetBuildProperty(unityFrameworkTargetGuid, "LD_RUNPATH_SEARCH_PATHS", "$(inherited) @executable_path/Frameworks");
-                //
-                // var frameworksBuildPhase = pbxProject.GetFrameworksBuildPhaseByTarget(unityFrameworkTargetGuid);
-                // foreach (string binary in mod.embed_binaries)
-                // {
-                //     string absoluteFilePath = System.IO.Path.Combine(mod.path, binary);
-                //     string fileGuid = pbxProject.AddFile(absoluteFilePath, projectRootPath);
-                //     PBXProjectExtensions.AddFileToEmbedFrameworks(pbxProject, unityMainTargetGuid, fileGuid);
-                //     pbxProject.AddFileToBuildSection(unityFrameworkTargetGuid, frameworksBuildPhase, fileGuid);
-                // }
             }
             //Folders which should be added. All file and folders(recursively) will be added
             Debug.Log("Adding folders...");
@@ -386,7 +525,6 @@ namespace NdXUPorter
                 Debug.Log("Adding folder " + absoluteFolderPath);
                 this.AddFolder(absoluteFolderPath, (string[])mod.excludes.ToArray(typeof(string)));
             }
-
             //Header Search Paths in Build Setting of Xcode
             Debug.Log("Adding headerpaths...");
             //添加头文件查找路径
@@ -395,6 +533,30 @@ namespace NdXUPorter
                 Debug.Log("add header path : " + headerpath);
                 pbxProject.AddBuildProperty(unityFrameworkTargetGuid, "HEADER_SEARCH_PATHS", "$(PROJECT_DIR)/" + headerpath);
             }
+
+            //Optional fields,添加库文件查找路径
+            Debug.Log("Adding librarypaths...");
+            if (mod.librarypaths != null)
+            {
+                foreach (string librarypath in mod.librarypaths)
+                {
+                    Debug.Log("add library path :" + librarypath);
+                    pbxProject.AddBuildProperty(unityFrameworkTargetGuid, "LIBRARY_SEARCH_PATHS", librarypath);
+                }
+            }
+
+            //Optional fields,添加runpath_search_paths
+            Debug.Log("Adding runpaths...");
+            if (mod.runpaths != null)
+            {
+                foreach (string runpath in mod.runpaths)
+                {
+                    Debug.Log("add runpath path :" + runpath);
+                    pbxProject.AddBuildProperty(unityFrameworkTargetGuid, "LD_RUNPATH_SEARCH_PATHS", runpath);
+
+                }
+            }
+
             //Compiler flags which should be added, e.g. "-Wno-vexing-parse"
             Debug.Log("Adding compiler flags...");
             foreach (string flag in mod.compiler_flags)
@@ -411,10 +573,23 @@ namespace NdXUPorter
                 pbxProject.AddBuildProperty(unityMainTargetGuid, "OTHER_LDFLAGS", flag);
                 pbxProject.AddBuildProperty(unityFrameworkTargetGuid, "OTHER_LDFLAGS", flag);
             }
+
+            if (mod.needSwift)
+            {
+                Debug.Log("Need Swift...");
+                needSwiftModule = true;
+            }
+
+            Debug.Log("Adding Capability items...");
+            foreach (var capability in mod.capabilitys)
+            {
+                //Debug.Log(capability);
+                if (AddCapability(Convert.ToInt32(capability)))
+                    hasCapabilityModify = true;
+            }
+
             //edit the Info.plist file, only the urltype is supported currently. in url type settings, name and schemes are required, while role is optional and is Editor by default.
             Debug.Log("Adding plist items...");
-            string plistPath = Path.Combine(this.projectRootPath ,"Info.plist");
-            XCPlist plist = new XCPlist(plistPath);
             plist.Process(mod.plist);
 
             Debug.Log("Modify xcode classes...");
@@ -426,8 +601,20 @@ namespace NdXUPorter
 
         public void Save()
         {
-            Debug.Log("pbxProject save ="+ pbxProjPath);
+            //保存先后顺序会影响设置的内容
+            if (hasCapabilityModify)
+            {
+                Debug.Log("Capability writeToFile");
+                pbxProject.AddFile("Entitlements.entitlements", "Entitlements.entitlements");
+                pbxProject.AddBuildProperty(unityMainTargetGuid, "CODE_SIGN_ENTITLEMENTS", "Entitlements.entitlements");
+                capabilityManager.WriteToFile();
+            }
+
+            Debug.Log("pbxProject save =" + pbxProjPath);
             File.WriteAllText(pbxProjPath, pbxProject.WriteToString());
+
+            plist.Save();
+
         }
 
         public void Dispose()

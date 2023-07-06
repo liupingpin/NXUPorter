@@ -17,6 +17,12 @@ namespace NdXUPorter
         private const string kSdkTestConfigFolder = "/sdk-sdk_testConfig";
         private const string kXcodeSdkFolder = "/pluginSdk";
 
+        const string XCODE_IMAGES_FOLDER = "Unity-iPhone/Images.xcassets";
+        const string SOURCE_FOLDER_NAME = "LaunchImageLandscape.imageset";
+        static string SOURCE_FOLDER_ROOT = Application.dataPath + "/../../Code/XCodeProjs/SplashLauncher/SplashLauncher/Assets.xcassets";
+        static string STOTYBOARD_FOLDER_ROOT = Application.dataPath + "/../../Code/XCodeProjs/SplashLauncher/SplashLauncher/Base.lproj";
+        private const string STORYBOARD_NAME = "LaunchScreen.storyboard";
+
 #if UNITY_EDITOR && UNITY_EDITOR_OSX
         /// <summary>
         /// 这里是通过配置文件去
@@ -40,58 +46,14 @@ namespace NdXUPorter
                 SearchOption.AllDirectories);
             project.ApplyMods(files);
             //自定义特殊的构建
-            CustomEditPBXProject(project);
-            //构架结束并保存
+            project.CustomMod();
+            //是否需求Swift混编
+            if (project.needSwiftModule) OpenSwift(project, pathToBuiltProject);
+            //构建结束并保存
             project.Save();
-        }
 
-        //将大部分动态配置放在XUPorter来构建。
-        //要注意勾选掉 select platform for plugins 的 ios 选项，防止unity 自身拷贝到xcode 导致 xuporter 导出失败。
-        private static void CustomEditPBXProject(XCProject project)
-        {
-            var proj = project.pbxProject;
-            proj.SetBuildProperty(project.unityMainTargetGuid, "ENABLE_BITCODE", "NO");
-            proj.SetBuildProperty(project.unityFrameworkTargetGuid, "ENABLE_BITCODE", "NO");
-            proj.SetBuildProperty(project.unityMainTargetGuid, "ENABLE_OBJECTIVE-C_EXCEPTIONS", "YES");
-            proj.SetBuildProperty(project.unityMainTargetGuid, "ENABLE_C++_EXCEPTIONS", "YES");
-            proj.SetBuildProperty(project.unityMainTargetGuid, "ENABLE_C++_RUNTIME_TYPES", "YES");
-
-            //ChannelBuild_IOS\commonFolder下的默认路径
-            string common_path = "ChannelBuild_IOS/commonFolder/";
-            string entitlement_path = common_path;
-            var path = project.projectRootPath;
-            if (AppBuildPipeline.iosChannelInfo != null)
-            {
-                string f_name = ((EChannelId)AppBuildPipeline.iosChannelInfo.id).ToString() + "/";
-                entitlement_path = "ChannelBuild_IOS/" + f_name;
-            }
-            //Capability
-            var id_array = PlayerSettings.applicationIdentifier.Split('.');
-            var a_name = "zysy";
-            if (id_array.Length == 3)
-                a_name = id_array[2];
-            var file_name = a_name + ".entitlements";
-            var src = entitlement_path + file_name;
-            //向判断下渠道路径下是否存在，不存在用通用路径下的配置
-            if (!File.Exists(src))
-            {
-                src = common_path + file_name;
-            }
-            //最后拷贝entitlements 来修改 Xcode的Capability
-            //ProjectCapabilityManager
-            if (File.Exists(src))
-            {
-                var target_name = "Unity-iPhone";
-                var dst = path + "/" + target_name + "/" + file_name;
-                Debug.Log($"Capability : 拷贝{src} 到 {dst}");
-                FileUtil.CopyFileOrDirectory(src, dst);
-                proj.AddFile(target_name + "/" + file_name, file_name);
-                proj.AddBuildProperty(project.unityMainTargetGuid, "CODE_SIGN_ENTITLEMENTS", target_name + "/" + file_name);
-            }
-            else
-            {
-                Debug.LogWarning($"不存在 {src}");
-            }
+            //启动页构建
+            CopyXcodeLanchImage(pathToBuiltProject);
         }
 #endif
         /// <summary>
@@ -166,5 +128,34 @@ namespace NdXUPorter
             //将目标文件拷贝到项目里 
             FileUtils.CopyFilesToDestDirRecursive(dirPath, path, ".meta");
         }
+
+        //Xcode storyboard 开屏页 UI资源
+        static void CopyXcodeLanchImage(string path)
+        {
+            string sourcePath = $"{SOURCE_FOLDER_ROOT}/{SOURCE_FOLDER_NAME}";
+            string targetPath = $"{path}/{XCODE_IMAGES_FOLDER}/{SOURCE_FOLDER_NAME}";
+            FileUtil.DeleteFileOrDirectory(targetPath);
+            FileUtil.CopyFileOrDirectory(sourcePath, targetPath);
+            //storyboard
+            sourcePath = $"{STOTYBOARD_FOLDER_ROOT}/{STORYBOARD_NAME}";
+            targetPath = $"{path}/{STORYBOARD_NAME}";
+            FileUtil.DeleteFileOrDirectory(targetPath);
+            FileUtil.CopyFileOrDirectory(sourcePath, targetPath);
+        }
+#if UNITY_EDITOR_OSX
+        static void OpenSwift(XCProject project, string xcodeProjPath)
+        {
+            string dirPath = kChannelFolder + "swiftFolder";
+            if (Directory.Exists(dirPath))
+            {
+                Debug.Log($"拷贝SwiftFolder:{dirPath}");
+                var path = xcodeProjPath;
+                //将目标文件拷贝到Xcode工程里
+                FileUtils.CopyFilesToDestDirRecursive(dirPath, path, ".meta");
+                //添加构建配置
+                project.SwiftSetting();
+            }
+        }
+#endif
     }
 }

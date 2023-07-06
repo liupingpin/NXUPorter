@@ -95,6 +95,22 @@ namespace NdXUPorter
             }
         }
 
+        public ArrayList librarypaths
+        {
+            get
+            {
+                return (ArrayList)_datastore["librarypaths"];
+            }
+        }
+
+        public ArrayList runpaths
+        {
+            get
+            {
+                return (ArrayList)_datastore["runpaths"];
+            }
+        }
+
         public ArrayList files
         {
             get
@@ -153,11 +169,29 @@ namespace NdXUPorter
             }
         }
 
+        public ArrayList capabilitys
+        {
+            get
+            {
+                return (ArrayList)_datastore["capabilitys"];
+            }
+        }
+
         public ArrayList code_modifys
         {
             get
             {
                 return (ArrayList)_datastore["code_modify"];
+            }
+        }
+
+        public bool needSwift
+        {
+            get
+            {
+                if (_datastore.ContainsKey("need_swift"))
+                    return (bool)_datastore["need_swift"];
+                return false;
             }
         }
 
